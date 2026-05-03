@@ -182,6 +182,13 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     table = {
         "act_open_url":      h_actions.act_open_url,
         "act_screenshot":    h_actions.act_screenshot,
+        "act_screenshot_hd": h_actions.act_screenshot_hd,
+        "act_screenshot_full": h_actions.act_screenshot_full,
+        "act_fit_screen":    h_actions.act_fit_screen,
+        "act_view_laptop":   h_actions.act_view_laptop,
+        "act_view_desktop":  h_actions.act_view_desktop,
+        "act_zoom_out":      h_actions.act_zoom_out,
+        "act_zoom_in":       h_actions.act_zoom_in,
         "act_back":          h_actions.act_back,
         "act_reload":        h_actions.act_reload,
         "act_enter":         h_actions.act_enter,

@@ -22,15 +22,24 @@ ALLOW_ALL: bool = len(ADMIN_IDS) == 0
 
 # ── Browser ──
 HEADLESS: bool = os.environ.get("HEADLESS", "1") not in ("0", "false", "False")
-VIEWPORT_W: int = int(os.environ.get("VIEWPORT_W", "1280"))
-VIEWPORT_H: int = int(os.environ.get("VIEWPORT_H", "800"))
+# Default desktop/laptop browser size. 1920×1080 shows much more of pages like Canva.
+# You can override from Railway Variables if your server memory is low.
+VIEWPORT_W: int = int(os.environ.get("VIEWPORT_W", "1920"))
+VIEWPORT_H: int = int(os.environ.get("VIEWPORT_H", "1080"))
+LAPTOP_VIEWPORT_W: int = int(os.environ.get("LAPTOP_VIEWPORT_W", "1366"))
+LAPTOP_VIEWPORT_H: int = int(os.environ.get("LAPTOP_VIEWPORT_H", "768"))
+DESKTOP_VIEWPORT_W: int = int(os.environ.get("DESKTOP_VIEWPORT_W", "1920"))
+DESKTOP_VIEWPORT_H: int = int(os.environ.get("DESKTOP_VIEWPORT_H", "1080"))
+AUTO_PAGE_ZOOM: float = float(os.environ.get("AUTO_PAGE_ZOOM", "0.80"))
+MIN_PAGE_ZOOM: float = float(os.environ.get("MIN_PAGE_ZOOM", "0.50"))
+MAX_PAGE_ZOOM: float = float(os.environ.get("MAX_PAGE_ZOOM", "1.50"))
 USER_AGENT: str = os.environ.get(
     "USER_AGENT",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
 )
 SCROLL_STEP_Y: int = int(os.environ.get("SCROLL_STEP_Y", "650"))
-SCROLL_STEP_X: int = int(os.environ.get("SCROLL_STEP_X", "650"))
+SCROLL_STEP_X: int = int(os.environ.get("SCROLL_STEP_X", "800"))
 
 
 # ── Browser engine ──
