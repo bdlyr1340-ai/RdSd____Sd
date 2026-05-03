@@ -11,6 +11,7 @@ from telegram.ext import ContextTypes
 from bot import config
 from bot.services.browser_manager import manager
 from bot.services.browser_session import BrowserSession
+from bot.services.access_control import request_access
 from bot.utils.keyboards import (
     back_to_panel, confirm_end_menu, control_panel,
     grid_settings_menu, main_menu, proxy_menu,
@@ -22,6 +23,32 @@ log = logging.getLogger(__name__)
 # ════════════════════════════════════════════════════════════════════
 # Helpers
 # ════════════════════════════════════════════════════════════════════
+def _short_url(url: str, limit: int = 140) -> str:
+    if not url:
+        return "—"
+    return url if len(url) <= limit else url[:limit - 1] + "…"
+
+
+async def _status_caption(sess: BrowserSession, caption: str) -> str:
+    """Append compact page status so screenshots are easier to understand."""
+    try:
+        st = await sess.page_status()
+    except Exception:
+        st = {}
+    if not st:
+        return caption
+    title = st.get("title") or "بدون عنوان"
+    if len(title) > 70:
+        title = title[:69] + "…"
+    line = (
+        f"🧭 الموضع: X={st.get('x', 0)} / Y={st.get('y', 0)} | "
+        f"الشاشة: {st.get('viewportW', 0)}×{st.get('viewportH', 0)} | "
+        f"الصفحة: {st.get('pageW', 0)}×{st.get('pageH', 0)}"
+    )
+    out = f"{caption}\n\n{line}\n🏷️ {title}\n🔗 {_short_url(st.get('url', ''))}"
+    return out[:1000]
+
+
 async def _send_screenshot(
     update: Update,
     sess: BrowserSession,
@@ -29,6 +56,7 @@ async def _send_screenshot(
     caption: str,
 ) -> None:
     """Send a screenshot to the user, with a fallback message if missing."""
+    caption = await _status_caption(sess, caption)
     panel = control_panel(sess.grid_rows, sess.grid_cols)
     chat_id = update.effective_chat.id
     bot = update.get_bot()
@@ -248,6 +276,58 @@ async def act_scroll_bottom(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
         return
     p = await sess.scroll("bottom")
     await _send_screenshot(update, sess, p, "⏬ نهاية الصفحة")
+
+
+async def act_scroll_left(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    sess = await _ensure_session(update)
+    if not sess:
+        return
+    p = await sess.scroll("left")
+    await _send_screenshot(update, sess, p, "⬅️ تم تحريك الشاشة لليسار")
+
+
+async def act_scroll_right(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    sess = await _ensure_session(update)
+    if not sess:
+        return
+    p = await sess.scroll("right")
+    await _send_screenshot(update, sess, p, "➡️ تم تحريك الشاشة لليمين")
+
+
+async def act_scroll_left_end(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    sess = await _ensure_session(update)
+    if not sess:
+        return
+    p = await sess.scroll("left_end")
+    await _send_screenshot(update, sess, p, "⇤ أقصى يسار الصفحة")
+
+
+async def act_scroll_right_end(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    sess = await _ensure_session(update)
+    if not sess:
+        return
+    p = await sess.scroll("right_end")
+    await _send_screenshot(update, sess, p, "أقصى يمين الصفحة ⇥")
+
+
+async def act_page_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    sess = await _ensure_session(update)
+    if not sess:
+        return
+    st = await sess.page_status()
+    body = (
+        "🧭 حالة الصفحة الآن\n\n"
+        f"• الموضع: X={st.get('x', 0)} / Y={st.get('y', 0)}\n"
+        f"• حجم الشاشة: {st.get('viewportW', 0)}×{st.get('viewportH', 0)}\n"
+        f"• حجم الصفحة: {st.get('pageW', 0)}×{st.get('pageH', 0)}\n"
+        f"• العنصر بالنص: {st.get('centreTag', '—') or '—'}\n"
+        f"• العنصر النشط: {st.get('activeTag', '—') or '—'}\n"
+        f"• العنوان: {(st.get('title') or 'بدون عنوان')[:80]}\n"
+        f"• الرابط: {_short_url(st.get('url', ''), 180)}"
+    )
+    await update.effective_message.reply_text(
+        body, reply_markup=control_panel(sess.grid_rows, sess.grid_cols),
+    )
 
 
 async def act_grid_show(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -516,6 +596,7 @@ async def act_grid_custom(update: Update,
 # ════════════════════════════════════════════════════════════════════
 async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not config.is_authorized(update.effective_user.id):
+        await request_access(update, ctx)
         return
     awaiting = ctx.user_data.get("awaiting")
     if not awaiting:

@@ -8,6 +8,7 @@ from telegram.ext import ContextTypes
 
 from bot import config
 from bot.utils.keyboards import main_menu
+from bot.services.access_control import request_access
 
 log = logging.getLogger(__name__)
 
@@ -52,9 +53,7 @@ HELP = (
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not config.is_authorized(user.id):
-        await update.effective_message.reply_text(
-            "🚫 غير مسموح لك باستخدام هذا البوت."
-        )
+        await request_access(update, ctx)
         return
     label = ctx.user_data.get("proxy_label", "")
     # Lazy import to avoid a circular dependency at module load time.
@@ -66,11 +65,15 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not config.is_authorized(update.effective_user.id):
+        await request_access(update, ctx)
         return
     await update.effective_message.reply_markdown(HELP)
 
 
 async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not config.is_authorized(update.effective_user.id):
+        await request_access(update, ctx)
+        return
     ctx.user_data.pop("awaiting", None)
     ctx.user_data.pop("await_meta", None)
     await update.effective_message.reply_text("✖️ تم الإلغاء.")
