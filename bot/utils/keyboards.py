@@ -83,29 +83,40 @@ def control_panel(grid_rows: int, grid_cols: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(f"🔢 شبكة الموس ({total_cells})",
                                  callback_data="act_grid_show"),
         ],
-        # Row 5 — small scroll
+        # Row 5 — vertical scroll
         [
             InlineKeyboardButton("⬆️ صعود بسيط", callback_data="act_scroll_up"),
             InlineKeyboardButton("⬇️ نزول بسيط", callback_data="act_scroll_down"),
         ],
-        # Row 6 — full scroll
+        # Row 6 — full vertical scroll
         [
             InlineKeyboardButton("⏫ صعود نهاية", callback_data="act_scroll_top"),
             InlineKeyboardButton("⏬ نزول نهاية", callback_data="act_scroll_bottom"),
         ],
-        # Row 7 — text search
+        # Row 7 — horizontal movement for pages wider than the viewport
+        [
+            InlineKeyboardButton("⬅️ تحريك يسار", callback_data="act_scroll_left"),
+            InlineKeyboardButton("➡️ تحريك يمين", callback_data="act_scroll_right"),
+        ],
+        # Row 8 — horizontal edges
+        [
+            InlineKeyboardButton("⇤ أقصى يسار", callback_data="act_scroll_left_end"),
+            InlineKeyboardButton("أقصى يمين ⇥", callback_data="act_scroll_right_end"),
+        ],
+        # Row 9 — text search
         [
             InlineKeyboardButton("🔍 بحث + ضغط", callback_data="act_find_click"),
             InlineKeyboardButton("🔎 بحث + ضغط + مسح", callback_data="act_find_clear"),
         ],
-        # Row 8 — code detect + time log
+        # Row 10 — code detect + status
         [
             InlineKeyboardButton("🛡️ كود التحقق", callback_data="act_detect_code"),
-            InlineKeyboardButton("🕒 تسجيل الوقت", callback_data="act_log_time"),
+            InlineKeyboardButton("🧭 حالة الصفحة", callback_data="act_page_status"),
         ],
-        # Row 9 — settings + save
+        # Row 11 — settings + time log
         [
             InlineKeyboardButton("⚙️ إعدادات الشبكة", callback_data="act_grid_settings"),
+            InlineKeyboardButton("🕒 تسجيل الوقت", callback_data="act_log_time"),
         ],
         [
             InlineKeyboardButton("💾 حفظ وإنهاء الجلسة", callback_data="act_save_end"),
