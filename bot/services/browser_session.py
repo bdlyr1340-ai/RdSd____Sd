@@ -98,17 +98,49 @@ class BrowserSession:
             f"{self.user_id}_{ts}_{tag}.{ext}",
         )
 
-    async def _safe_screenshot(self, path: str) -> Optional[str]:
+    async def _safe_screenshot(self, path: str, full_page: bool = False) -> Optional[str]:
         try:
             await self.page.screenshot(
                 path=path,
-                full_page=False,           # only viewport — needed for grid alignment
-                timeout=15_000,
+                full_page=full_page,
+                timeout=30_000 if full_page else 15_000,
             )
             return path
         except Exception as exc:
             log.warning("screenshot failed: %s", exc)
             return None
+
+    async def _viewport_size(self) -> Tuple[int, int]:
+        """Return the live Playwright viewport size instead of assuming config defaults."""
+        try:
+            vp = self.page.viewport_size or {}
+            w = int(vp.get("width") or config.VIEWPORT_W)
+            h = int(vp.get("height") or config.VIEWPORT_H)
+            return w, h
+        except Exception:
+            return config.VIEWPORT_W, config.VIEWPORT_H
+
+    async def _apply_page_zoom(self, zoom: float) -> None:
+        """Apply a CSS zoom so large pages show more content in screenshots."""
+        zoom = max(config.MIN_PAGE_ZOOM, min(config.MAX_PAGE_ZOOM, float(zoom)))
+        await self.page.evaluate(
+            """
+            (zoom) => {
+                window.__botPageZoom = zoom;
+                const root = document.documentElement;
+                const body = document.body;
+                if (root) {
+                    root.style.zoom = String(zoom);
+                    root.style.transformOrigin = '0 0';
+                }
+                if (body) {
+                    body.style.transformOrigin = '0 0';
+                }
+                return zoom;
+            }
+            """,
+            zoom,
+        )
 
     # ------------------------------------------------------------------
     # Actions
@@ -128,6 +160,72 @@ class BrowserSession:
         async with self._lock:
             self.recorder.log("screenshot")
             return await self._safe_screenshot(self._shot_path("manual"))
+
+    async def screenshot_full_page(self) -> Optional[str]:
+        """Capture the complete page height as a high-detail image."""
+        async with self._lock:
+            self.recorder.log("screenshot_full_page")
+            return await self._safe_screenshot(
+                self._shot_path("full_page"), full_page=True
+            )
+
+    async def set_viewport(self, width: int, height: int, zoom: Optional[float] = None) -> Optional[str]:
+        """Change the live browser viewport and optionally page zoom."""
+        async with self._lock:
+            width = max(800, min(2560, int(width)))
+            height = max(600, min(1600, int(height)))
+            try:
+                await self.page.set_viewport_size({"width": width, "height": height})
+                if zoom is not None:
+                    await self._apply_page_zoom(zoom)
+                await asyncio.sleep(0.25)
+                self.recorder.log("set_viewport", width=width, height=height, zoom=zoom)
+            except Exception as exc:
+                log.warning("set_viewport failed: %s", exc)
+            return await self._safe_screenshot(self._shot_path("viewport"))
+
+    async def set_zoom(self, zoom: float) -> Optional[str]:
+        """Change only page zoom, preserving current scroll position."""
+        async with self._lock:
+            try:
+                await self._apply_page_zoom(zoom)
+                self.recorder.log("set_zoom", zoom=zoom)
+            except Exception as exc:
+                log.warning("set_zoom failed: %s", exc)
+            await asyncio.sleep(0.25)
+            return await self._safe_screenshot(self._shot_path("zoom"))
+
+    async def fit_screen(self) -> Optional[str]:
+        """One button fix: wide desktop viewport + zoom out + preserve visible area."""
+        async with self._lock:
+            try:
+                await self.page.set_viewport_size({
+                    "width": config.DESKTOP_VIEWPORT_W,
+                    "height": config.DESKTOP_VIEWPORT_H,
+                })
+                await self._apply_page_zoom(config.AUTO_PAGE_ZOOM)
+                await asyncio.sleep(0.35)
+                # Keep the current vertical position, but reset horizontal drift.
+                await self.page.evaluate(
+                    """
+                    () => {
+                        const doc = document.scrollingElement || document.documentElement || document.body;
+                        if (doc) doc.scrollLeft = 0;
+                        window.scrollTo({left: 0, top: window.scrollY, behavior: 'instant'});
+                        return true;
+                    }
+                    """
+                )
+                self.recorder.log(
+                    "fit_screen",
+                    width=config.DESKTOP_VIEWPORT_W,
+                    height=config.DESKTOP_VIEWPORT_H,
+                    zoom=config.AUTO_PAGE_ZOOM,
+                )
+            except Exception as exc:
+                log.warning("fit_screen failed: %s", exc)
+            await asyncio.sleep(0.25)
+            return await self._safe_screenshot(self._shot_path("fit_screen"))
 
     async def back(self) -> Optional[str]:
         async with self._lock:
@@ -320,8 +418,22 @@ class BrowserSession:
                         viewportH: Math.round(innerHeight),
                         pageW: Math.round(doc.scrollWidth),
                         pageH: Math.round(doc.scrollHeight),
+                        zoom: Number(window.__botPageZoom || (document.documentElement && document.documentElement.style.zoom) || 1),
                         centreTag: centre ? centre.tagName.toLowerCase() : '',
                         activeTag: active ? active.tagName.toLowerCase() : '',
+                        scrollables: Array.from(document.querySelectorAll('*')).filter(el => {
+                            const st = getComputedStyle(el);
+                            return (el.scrollWidth > el.clientWidth + 10 || el.scrollHeight > el.clientHeight + 10)
+                                && /(auto|scroll|overlay)/.test(st.overflow + st.overflowX + st.overflowY);
+                        }).slice(0, 5).map(el => ({
+                            tag: el.tagName.toLowerCase(),
+                            x: Math.round(el.scrollLeft),
+                            y: Math.round(el.scrollTop),
+                            w: Math.round(el.clientWidth),
+                            h: Math.round(el.clientHeight),
+                            sw: Math.round(el.scrollWidth),
+                            sh: Math.round(el.scrollHeight),
+                        })),
                     };
                 }
                 """
@@ -371,14 +483,15 @@ class BrowserSession:
                 ix, iy = self._last_grid_cells[n]
                 img_w, img_h = self._last_grid_size
             else:
-                # Fallback: infer from viewport.
+                # Fallback: infer from the live viewport, not old config defaults.
                 from bot.services.grid_overlay import cell_center
-                img_w, img_h = config.VIEWPORT_W, config.VIEWPORT_H
+                img_w, img_h = await self._viewport_size()
                 ix, iy = cell_center(self.grid_rows, self.grid_cols, n,
                                      img_w, img_h)
-            # Convert image px → CSS px (viewport coords) via the device-pixel ratio.
-            sx = config.VIEWPORT_W / img_w
-            sy = config.VIEWPORT_H / img_h
+            # Convert image px → CSS px (viewport coords) via the live viewport.
+            viewport_w, viewport_h = await self._viewport_size()
+            sx = viewport_w / img_w
+            sy = viewport_h / img_h
             cx = ix * sx
             cy = iy * sy
             try:
