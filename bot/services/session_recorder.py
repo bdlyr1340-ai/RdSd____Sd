@@ -36,6 +36,14 @@ class SessionRecorder:
         self.start_iso = time.strftime("%Y-%m-%d %H:%M:%S",
                                        time.localtime(self.start_ts))
         self.actions: List[Action] = []
+        # Optional proxy used by this session — included in the generated script
+        # so the exported automation can be replayed under the same conditions.
+        self.proxy_dict: Dict[str, Any] | None = None
+        self.proxy_label: str = ""
+        self.country_profile: Dict[str, Any] | None = None
+        # Engine used: "camoufox" or "playwright" — affects the import in the
+        # generated standalone script.
+        self.engine: str = "playwright"
 
     # ------------------------------------------------------------------
     # Logging
@@ -52,32 +60,156 @@ class SessionRecorder:
     # Exports
     # ------------------------------------------------------------------
     def to_python_script(self) -> str:
-        """Generate a runnable Playwright Python script."""
+        """Generate a runnable standalone automation script.
+
+        The script imports either Camoufox or vanilla Playwright depending on
+        what ``self.engine`` was set to during the session. It also embeds the
+        same human-typing simulator the bot used, so replays look identical.
+        """
+        is_camoufox = (self.engine == "camoufox")
         lines: List[str] = []
         lines.append('"""')
         lines.append("Auto-generated browser-automation script.")
         lines.append(f"User ID    : {self.user_id}")
         lines.append(f"Started at : {self.start_iso}")
         lines.append(f"Actions    : {len(self.actions)}")
+        lines.append(f"Engine     : {self.engine}")
+        if self.proxy_label:
+            lines.append(f"Proxy      : {self.proxy_label}")
+        if self.country_profile:
+            lines.append(f"Country    : {self.country_profile.get('label', '')}")
         lines.append("")
         lines.append("Run with:")
-        lines.append("    pip install playwright")
-        lines.append("    playwright install chromium")
+        if is_camoufox:
+            lines.append("    pip install 'camoufox[geoip]' playwright")
+            lines.append("    camoufox fetch")
+        else:
+            lines.append("    pip install playwright")
+            lines.append("    playwright install chromium")
         lines.append("    python session_script.py")
         lines.append('"""')
         lines.append("from __future__ import annotations")
         lines.append("")
         lines.append("import asyncio")
-        lines.append("from playwright.async_api import async_playwright")
+        lines.append("import random")
+        lines.append("import re")
+        if is_camoufox:
+            lines.append("from camoufox.async_api import AsyncCamoufox")
+        else:
+            lines.append("from playwright.async_api import async_playwright")
+        lines.append("")
+        lines.append("")
+        # Inline proxy + country literals.
+        if self.proxy_dict:
+            lines.append(f"PROXY = {json.dumps(self.proxy_dict, ensure_ascii=False)}")
+        else:
+            lines.append("PROXY = None")
+        if self.country_profile:
+            cp = {
+                "locale": self.country_profile["locale"],
+                "timezone": self.country_profile["timezone"],
+                "geolocation": self.country_profile["geolocation"],
+                "accept_language": self.country_profile["accept_language"],
+            }
+            lines.append(f"COUNTRY = {json.dumps(cp, ensure_ascii=False)}")
+        else:
+            lines.append("COUNTRY = None")
+        lines.append("")
+        lines.append("")
+        # ── Embedded human-typing simulator (same logic as the bot uses) ─
+        lines.append("_ADJ = {")
+        lines.append('    "q":"wa","w":"qase","e":"wsdr","r":"edft","t":"rfgy",')
+        lines.append('    "y":"tghu","u":"yhji","i":"ujko","o":"iklp","p":"ol",')
+        lines.append('    "a":"qwsz","s":"awedxz","d":"serfcx","f":"drtgvc",')
+        lines.append('    "g":"ftyhbv","h":"gyujnb","j":"hujkmn","k":"jiolm,",')
+        lines.append('    "l":"kop;.","z":"asx","x":"zsdc","c":"xdfv","v":"cfgb",')
+        lines.append('    "b":"vghn","n":"bhjm","m":"njk,",')
+        lines.append("}")
+        lines.append('_CODE_LIKE = re.compile(r"^[0-9\\s\\-+().]+$")')
+        lines.append('_EMAIL_LIKE = re.compile(r"@.+\\.")')
+        lines.append('_URL_LIKE = re.compile(r"https?://|www\\.")')
+        lines.append("")
+        lines.append("def _is_sensitive_text(text: str) -> bool:")
+        lines.append("    if not text: return True")
+        lines.append("    if _CODE_LIKE.match(text): return True")
+        lines.append("    if _EMAIL_LIKE.search(text): return True")
+        lines.append("    if _URL_LIKE.search(text): return True")
+        lines.append("    return False")
+        lines.append("")
+        lines.append("def _adjacent_typo(ch):")
+        lines.append("    if not ch or not ch.isalpha(): return None")
+        lines.append("    n = _ADJ.get(ch.lower())")
+        lines.append("    if not n: return None")
+        lines.append("    t = random.choice(n)")
+        lines.append("    return t.upper() if ch.isupper() else t")
+        lines.append("")
+        lines.append("async def human_type(page, text, typo_rate=0.0):")
+        lines.append("    if not text: return")
+        lines.append("    if _is_sensitive_text(text): typo_rate = 0.0")
+        lines.append("    await asyncio.sleep(random.uniform(0.18, 0.45))")
+        lines.append("    burst_left = 0; last_was_space = False")
+        lines.append("    for i, ch in enumerate(text):")
+        lines.append("        if (typo_rate > 0 and burst_left == 0 and")
+        lines.append("                random.random() < typo_rate and i > 0):")
+        lines.append("            t = _adjacent_typo(ch)")
+        lines.append("            if t:")
+        lines.append("                await page.keyboard.type(t, delay=0)")
+        lines.append("                await asyncio.sleep(random.uniform(0.10, 0.30))")
+        lines.append("                if random.random() < 0.4:")
+        lines.append("                    await asyncio.sleep(random.uniform(0.15, 0.45))")
+        lines.append("                await page.keyboard.press('Backspace')")
+        lines.append("                await asyncio.sleep(random.uniform(0.08, 0.18))")
+        lines.append("        await page.keyboard.type(ch, delay=0)")
+        lines.append("        if burst_left > 0:")
+        lines.append("            burst_left -= 1; d = random.uniform(0.030, 0.075)")
+        lines.append("        else:")
+        lines.append("            if ch == ' ': d = random.uniform(0.10, 0.22)")
+        lines.append("            elif ch in '.,!?;:': d = random.uniform(0.14, 0.32)")
+        lines.append("            elif ch in '\\n\\t': d = random.uniform(0.20, 0.40)")
+        lines.append("            elif ch.isdigit(): d = random.uniform(0.07, 0.16)")
+        lines.append("            elif ch.isupper(): d = random.uniform(0.10, 0.22)")
+        lines.append("            else:")
+        lines.append("                d = max(0.04, min(0.30, random.lognormvariate(-2.35, 0.40)))")
+        lines.append("            if last_was_space and random.random() < 0.35:")
+        lines.append("                burst_left = random.randint(1, 3)")
+        lines.append("            r = random.random()")
+        lines.append("            if r < 0.035: d += random.uniform(0.30, 0.90)")
+        lines.append("            elif r < 0.155: d += random.uniform(0.05, 0.14)")
+        lines.append("        last_was_space = (ch == ' ')")
+        lines.append("        await asyncio.sleep(d)")
+        lines.append("    await asyncio.sleep(random.uniform(0.05, 0.18))")
         lines.append("")
         lines.append("")
         lines.append("async def run() -> None:")
-        lines.append("    async with async_playwright() as pw:")
-        lines.append("        browser = await pw.chromium.launch(headless=False)")
-        lines.append(f"        ctx = await browser.new_context("
-                     f"viewport={{'width': {self.viewport_w}, "
-                     f"'height': {self.viewport_h}}})")
-        lines.append("        page = await ctx.new_page()")
+        if is_camoufox:
+            lines.append("    cam_kwargs = dict(headless=False, humanize=True)")
+            lines.append("    if PROXY:")
+            lines.append("        cam_kwargs['proxy'] = PROXY")
+            lines.append("        cam_kwargs['geoip'] = True")
+            lines.append("    if COUNTRY:")
+            lines.append("        cam_kwargs['locale'] = [COUNTRY['locale'], 'en']")
+            lines.append("        if not PROXY:")
+            lines.append("            cam_kwargs['geoip'] = COUNTRY['geolocation']")
+            lines.append("    async with AsyncCamoufox(**cam_kwargs) as browser:")
+            lines.append("        page = await browser.new_page()")
+            lines.append(f"        await page.set_viewport_size("
+                         f"{{'width': {self.viewport_w}, 'height': {self.viewport_h}}})")
+        else:
+            lines.append("    async with async_playwright() as pw:")
+            lines.append("        browser = await pw.chromium.launch(headless=False)")
+            lines.append(f"        ctx_kwargs = dict(viewport={{'width': "
+                         f"{self.viewport_w}, 'height': {self.viewport_h}}})")
+            lines.append("        if COUNTRY:")
+            lines.append("            ctx_kwargs['locale'] = COUNTRY['locale']")
+            lines.append("            ctx_kwargs['timezone_id'] = COUNTRY['timezone']")
+            lines.append("            ctx_kwargs['geolocation'] = COUNTRY['geolocation']")
+            lines.append("            ctx_kwargs['permissions'] = ['geolocation']")
+            lines.append("            ctx_kwargs['extra_http_headers'] = "
+                         "{'Accept-Language': COUNTRY['accept_language']}")
+            lines.append("        if PROXY:")
+            lines.append("            ctx_kwargs['proxy'] = PROXY")
+            lines.append("        ctx = await browser.new_context(**ctx_kwargs)")
+            lines.append("        page = await ctx.new_page()")
         lines.append("")
 
         for i, act in enumerate(self.actions, 1):
@@ -106,6 +238,9 @@ class SessionRecorder:
         out.append(f"- **Started:** {self.start_iso}")
         out.append(f"- **Total actions:** {len(self.actions)}")
         out.append(f"- **Viewport:** {self.viewport_w}×{self.viewport_h}")
+        out.append(f"- **Engine:** `{self.engine}`")
+        if self.proxy_label:
+            out.append(f"- **Proxy/Country:** {self.proxy_label}")
         out.append("")
         out.append("---")
         out.append("")
@@ -193,7 +328,9 @@ class SessionRecorder:
                     "await asyncio.sleep(0.4)"]
         if t == "type_text":
             text = d.get("text", "")
-            return [f"await page.keyboard.type({self._q(text)}, delay=80)"]
+            return [
+                f"await human_type(page, {self._q(text)}, typo_rate=0.0)",
+            ]
         if t == "clear_text":
             return [
                 "await page.keyboard.press('Control+A')",

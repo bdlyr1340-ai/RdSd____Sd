@@ -19,12 +19,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import random
 import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from bot import config
 from bot.services.grid_overlay import overlay_numbered_grid
+from bot.services.human_typing import human_type
 from bot.services.session_recorder import SessionRecorder
 
 log = logging.getLogger(__name__)
@@ -41,18 +43,42 @@ _CODE_HINTS = (
 
 
 class BrowserSession:
-    """Wraps one Playwright page + a SessionRecorder."""
+    """Wraps one Playwright/Camoufox page + a SessionRecorder."""
 
-    def __init__(self, user_id: int, ctx: Any, page: Any) -> None:
+    def __init__(
+        self,
+        user_id: int,
+        owner: Any,
+        page: Any,
+        cleanup: Any = None,
+    ) -> None:
+        """
+        Args:
+            user_id: Telegram user id.
+            owner: Either a Playwright BrowserContext (Playwright engine) or
+                a Camoufox/Playwright Browser (Camoufox engine). Kept around
+                so the cleanup callback has a closure over it.
+            page: The Playwright/Camoufox Page we drive.
+            cleanup: Async callable that releases the owner's resources
+                (closes the context or the camoufox browser).
+        """
         self.user_id = user_id
-        self.ctx = ctx
+        self.owner = owner
         self.page = page
+        self._cleanup = cleanup
         self.recorder = SessionRecorder(
             user_id=user_id,
             viewport=(config.VIEWPORT_W, config.VIEWPORT_H),
         )
         self.grid_rows = config.DEFAULT_GRID_ROWS
         self.grid_cols = config.DEFAULT_GRID_COLS
+        # Proxy info (set by BrowserManager on creation).
+        self.proxy_label: str = ""   # e.g. "🇮🇶 العراق" or empty for direct
+        self.proxy_used: bool = False
+        # Country profile (timezone/locale/geo) applied to the context.
+        self.country_profile: Optional[Dict[str, Any]] = None
+        # Engine: "camoufox" or "playwright"
+        self.engine: str = "playwright"
         # Last grid info — used so the user can click cells by number after
         # the grid was rendered.
         self._last_grid_cells: Dict[int, Tuple[float, float]] = {}
@@ -139,8 +165,15 @@ class BrowserSession:
         async with self._lock:
             self.recorder.log("type_text", text=text)
             try:
-                # Use a small per-char delay so JS validators see human typing.
-                await self.page.keyboard.type(text, delay=80)
+                if config.HUMAN_TYPING:
+                    await human_type(
+                        self.page,
+                        text,
+                        typo_rate=config.HUMAN_TYPO_RATE,
+                    )
+                else:
+                    # Fallback: simple per-char type without humanization.
+                    await self.page.keyboard.type(text, delay=60)
             except Exception as exc:
                 log.warning("type_text failed: %s", exc)
             await asyncio.sleep(0.3)
@@ -350,10 +383,11 @@ class BrowserSession:
             await self.page.close()
         except Exception:
             pass
-        try:
-            await self.ctx.close()
-        except Exception:
-            pass
+        if self._cleanup is not None:
+            try:
+                await self._cleanup()
+            except Exception as exc:
+                log.warning("cleanup callback failed: %s", exc)
         return artifacts
 
     # ----- meta -----------------------------------------------------
