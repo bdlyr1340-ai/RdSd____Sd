@@ -67,7 +67,22 @@ def control_panel(grid_rows: int, grid_cols: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton("🌐 افتح رابط", callback_data="act_open_url"),
             InlineKeyboardButton("📸 لقطة شاشة", callback_data="act_screenshot"),
         ],
-        # Row 2 — back / refresh
+        # Row 2 — HD/full screenshots, useful when Telegram preview looks unclear
+        [
+            InlineKeyboardButton("📸 لقطة HD", callback_data="act_screenshot_hd"),
+            InlineKeyboardButton("🖼️ صفحة كاملة", callback_data="act_screenshot_full"),
+        ],
+        # Row 3 — screen/zoom controls
+        [
+            InlineKeyboardButton("🧩 ضبط الشاشة", callback_data="act_fit_screen"),
+            InlineKeyboardButton("🖥️ شاشة واسعة", callback_data="act_view_desktop"),
+        ],
+        [
+            InlineKeyboardButton("💻 شاشة لابتوب", callback_data="act_view_laptop"),
+            InlineKeyboardButton("🔍 تصغير", callback_data="act_zoom_out"),
+            InlineKeyboardButton("🔎 تكبير", callback_data="act_zoom_in"),
+        ],
+        # Row 4 — back / refresh
         [
             InlineKeyboardButton("⬅️ رجوع", callback_data="act_back"),
             InlineKeyboardButton("🔄 تحديث", callback_data="act_reload"),
