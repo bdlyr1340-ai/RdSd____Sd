@@ -13,7 +13,7 @@ from bot.services.browser_manager import manager
 from bot.services.browser_session import BrowserSession
 from bot.utils.keyboards import (
     back_to_panel, confirm_end_menu, control_panel,
-    grid_settings_menu, main_menu,
+    grid_settings_menu, main_menu, proxy_menu,
 )
 
 log = logging.getLogger(__name__)
@@ -82,9 +82,37 @@ async def session_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     # Close any leftover session.
     await manager.end_session(user.id)
-    sess = await manager.get_or_create(user.id)
+
+    # Pull the user's selected proxy + country profile.
+    proxy_dict = ctx.user_data.get("proxy_dict")          # Playwright dict or None
+    proxy_label = ctx.user_data.get("proxy_label", "")
+    country_profile = ctx.user_data.get("country_profile")  # dict or None
+
+    try:
+        sess = await manager.get_or_create(
+            user.id,
+            proxy=proxy_dict,
+            proxy_label=proxy_label,
+            country_profile=country_profile,
+        )
+    except Exception as exc:
+        log.exception("session_start failed: %s", exc)
+        await update.effective_message.reply_text(
+            f"❌ تعذّر تشغيل المتصفح: {exc}",
+            reply_markup=main_menu(proxy_label, manager.engine),
+        )
+        return
+
+    pieces = []
+    if country_profile:
+        pieces.append(f"الدولة: {country_profile['label']}")
+    if proxy_label and not proxy_label.startswith(country_profile["label"] if country_profile else "###"):
+        pieces.append(f"البروكسي: {proxy_label}")
+    pieces.append(f"المتصفح: {manager.engine}")
+    info = " | ".join(pieces)
+
     await update.effective_message.reply_text(
-        "✅ *تم تشغيل المتصفح.*\n"
+        f"✅ *تم تشغيل المتصفح*\n{info}\n\n"
         "اضغط *🌐 افتح رابط* للبدء، ثم استخدم لوحة التحكم.",
         parse_mode="Markdown",
         reply_markup=control_panel(sess.grid_rows, sess.grid_cols),
@@ -111,7 +139,8 @@ async def session_end_now(update: Update,
     if sess is None:
         await update.effective_message.reply_text(
             "لا توجد جلسة لإنهائها.",
-            reply_markup=main_menu(),
+            reply_markup=main_menu(ctx.user_data.get("proxy_label", ""),
+                                   manager.engine),
         )
         return
     msg_target = update.effective_message
@@ -140,7 +169,7 @@ async def session_end_now(update: Update,
     await bot.send_message(
         chat_id=chat_id,
         text="✅ انتهت الجلسة. اضغط /start لبدء جلسة جديدة.",
-        reply_markup=main_menu(),
+        reply_markup=main_menu(ctx.user_data.get("proxy_label", "")),
     )
 
 
@@ -332,6 +361,122 @@ async def act_log_time(update: Update,
 
 
 # ════════════════════════════════════════════════════════════════════
+# Proxy / country selection
+# ════════════════════════════════════════════════════════════════════
+async def proxy_show_menu(update: Update,
+                          ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show the country picker."""
+    current = ctx.user_data.get("proxy_label", "")
+    body = (
+        "🌍 *اختر الدولة*\n\n"
+        f"الحالي: {current or 'افتراضي'}\n\n"
+        "كيف يعمل:\n"
+        "• كل دولة تُطبَّق على المتصفح بكامل ملفها (الوقت، اللغة، GPS).\n"
+        "• ⚪ بجانب الدولة = ملف الدولة فقط، بدون بروكسي (الـ IP الحقيقي).\n"
+        "• بدون ⚪ = ملف الدولة + بروكسي → IP من الدولة فعلياً.\n"
+        "• «بروكسي مخصص»: أدخل بروكسي يدوياً.\n"
+        "• «افتراضي»: لا ملف ولا بروكسي.\n"
+        "⚠️ يطبَّق على *الجلسة القادمة* — أنهِ جلستك الحالية أولاً."
+    )
+    msg = update.effective_message
+    await msg.reply_markdown(body, reply_markup=proxy_menu())
+
+
+async def proxy_pick_preset(update: Update,
+                            ctx: ContextTypes.DEFAULT_TYPE,
+                            country_code: str) -> None:
+    """User chose a country. Apply its profile + proxy (if configured)."""
+    profile = config.COUNTRY_PROFILES.get(country_code)
+    if not profile:
+        await update.effective_message.reply_text("⚠️ دولة غير معروفة.")
+        return
+    label = profile["label"]
+    proxy_url = config.PROXY_URLS.get(country_code, "")
+    proxy_dict = None
+    if proxy_url:
+        try:
+            proxy_dict = config.parse_proxy_url(proxy_url)
+        except ValueError as exc:
+            await update.effective_message.reply_text(f"⚠️ {exc}")
+            return
+
+    ctx.user_data["country_profile"] = profile
+    ctx.user_data["country_code"] = country_code
+    ctx.user_data["proxy_dict"] = proxy_dict
+    ctx.user_data["proxy_label"] = label
+
+    extra = (
+        "✅ ملف الدولة + بروكسي مفعّل (IP فعلي من الدولة)."
+        if proxy_dict else
+        "ℹ️ ملف الدولة فقط (IP الحقيقي يبقى — لكن الوقت/اللغة/GPS تتغيّر)."
+    )
+    await update.effective_message.reply_markdown(
+        f"✅ الدولة: *{label}*\n{extra}\n\n"
+        f"اضغط *🚀 بدء جلسة جديدة* لتشغيل المتصفح.",
+        reply_markup=main_menu(label, manager.engine),
+    )
+
+
+async def proxy_set_direct(update: Update,
+                           ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Clear all country/proxy settings."""
+    for k in ("proxy_dict", "proxy_label", "country_profile", "country_code"):
+        ctx.user_data.pop(k, None)
+    await update.effective_message.reply_text(
+        "✅ تم العودة إلى الإعدادات الافتراضية (بدون ملف دولة أو بروكسي).",
+        reply_markup=main_menu("", manager.engine),
+    )
+
+
+async def proxy_custom_input(update: Update,
+                             ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Ask the user to send a custom proxy URL."""
+    _set_awaiting(ctx, "proxy_custom")
+    await update.effective_message.reply_markdown(
+        "✏️ أرسل رابط البروكسي بصيغة:\n"
+        "`http://user:pass@host:port`\n"
+        "أو\n"
+        "`socks5://host:port`\n\n"
+        "أو أرسل `direct` للإلغاء.",
+        reply_markup=back_to_panel(),
+    )
+
+
+async def engine_info(update: Update,
+                      ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show details about the active browser engine."""
+    eng = manager.engine
+    if eng == "camoufox":
+        body = (
+            "🦊 *المتصفح الحالي: Camoufox*\n\n"
+            "Camoufox هو Firefox مُعدَّل لمكافحة الكشف:\n"
+            "• كل ضغطات المفاتيح والماوس تظهر `isTrusted: true` "
+            "(لا تُكشف كأتمتة).\n"
+            "• يُخفي خصائص JavaScript المعروفة "
+            "(`navigator.webdriver` وغيرها).\n"
+            "• يدعم GeoIP — يضبط الوقت واللغة من الـ IP تلقائياً.\n"
+            "• يعمل بـ humanize للماوس + الكتابة البشرية المتطورة من البوت.\n\n"
+            "مثالي لمواقع تكشف البوتات."
+        )
+    else:
+        body = (
+            "🦊 *المتصفح الحالي: Playwright Chromium*\n\n"
+            "متصفح قياسي، أسرع وأخف. يعمل بكامل ميزات البوت لكن:\n"
+            "• ضغطات المفاتيح تظهر `isTrusted: false` "
+            "(قد تُكشف من المواقع الذكية).\n\n"
+            "💡 لتفعيل Camoufox:\n"
+            "1) `pip install 'camoufox[geoip]'`\n"
+            "2) `camoufox fetch`\n"
+            "3) `BROWSER_ENGINE=camoufox` في `.env`\n"
+            "4) أعد تشغيل البوت."
+        )
+    await update.effective_message.reply_markdown(
+        body,
+        reply_markup=main_menu(ctx.user_data.get("proxy_label", ""), manager.engine),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════
 # Grid preset buttons
 # ════════════════════════════════════════════════════════════════════
 async def act_grid_preset(update: Update,
@@ -381,6 +526,49 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     text = (update.effective_message.text or "").strip()
+
+    # ── proxy_custom doesn't need an active session ─────────────────
+    if awaiting == "proxy_custom":
+        _clear_awaiting(ctx)
+        if text.lower() in ("direct", "مباشر"):
+            for k in ("proxy_dict", "proxy_label", "country_profile",
+                      "country_code"):
+                ctx.user_data.pop(k, None)
+            await update.effective_message.reply_text(
+                "✅ تم العودة إلى الإعدادات الافتراضية.",
+                reply_markup=main_menu("", manager.engine),
+            )
+            return
+        try:
+            proxy_dict = config.parse_proxy_url(text)
+        except ValueError as exc:
+            await update.effective_message.reply_text(
+                f"⚠️ {exc}",
+                reply_markup=main_menu(
+                    ctx.user_data.get("proxy_label", ""), manager.engine,
+                ),
+            )
+            return
+        if not proxy_dict:
+            await update.effective_message.reply_text(
+                "⚠️ رابط فارغ.",
+                reply_markup=main_menu(
+                    ctx.user_data.get("proxy_label", ""), manager.engine,
+                ),
+            )
+            return
+        # Hide credentials in the label.
+        host = proxy_dict["server"].split("://", 1)[-1]
+        label = f"✏️ مخصص ({host})"
+        ctx.user_data["proxy_dict"] = proxy_dict
+        ctx.user_data["proxy_label"] = label
+        # Custom proxy keeps any previously-set country profile (for locale/tz).
+        await update.effective_message.reply_markdown(
+            f"✅ تم حفظ بروكسي مخصص: *{label}*",
+            reply_markup=main_menu(label, manager.engine),
+        )
+        return
+
     sess = await _ensure_session(update)
     if not sess:
         _clear_awaiting(ctx)
