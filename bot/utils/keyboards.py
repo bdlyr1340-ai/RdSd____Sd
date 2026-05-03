@@ -3,14 +3,59 @@ from __future__ import annotations
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+from bot import config
 
-def main_menu() -> InlineKeyboardMarkup:
-    """Main menu shown on /start."""
+
+def main_menu(country_label: str = "", engine: str = "") -> InlineKeyboardMarkup:
+    """Main menu shown on /start.
+
+    Args:
+        country_label: Currently selected country profile label (e.g.
+            "🇮🇶 العراق") or empty string. Reflected on the country button.
+        engine: "camoufox" or "playwright" — shown as an info row.
+    """
+    country_btn = (
+        f"🌍 الدولة: {country_label}"
+        if country_label
+        else "🌍 الدولة/السرفر — افتراضي"
+    )
+    engine_btn = (
+        f"🦊 المتصفح: {engine}" if engine else "🦊 المتصفح"
+    )
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🚀 بدء جلسة جديدة", callback_data="session_start")],
+        [InlineKeyboardButton(country_btn, callback_data="proxy_menu")],
+        [InlineKeyboardButton(engine_btn, callback_data="engine_info")],
         [InlineKeyboardButton("ℹ️ كيف يعمل البوت", callback_data="how_it_works")],
         [InlineKeyboardButton("📖 المساعدة", callback_data="help")],
     ])
+
+
+def proxy_menu() -> InlineKeyboardMarkup:
+    """Country picker. Items show ⚪ when no proxy is configured for that
+    country (the country profile still works — only the IP stays unchanged)."""
+    rows = []
+    pairs = list(config.COUNTRY_PROFILES.items())
+    # 2 buttons per row.
+    for i in range(0, len(pairs), 2):
+        row = []
+        for code, prof in pairs[i:i + 2]:
+            label = prof["label"]
+            has_proxy = bool(config.PROXY_URLS.get(code, ""))
+            mark = "" if has_proxy else " ⚪"   # ⚪ = profile only, no proxy
+            row.append(InlineKeyboardButton(
+                label + mark,
+                callback_data=f"proxy_pick_{code}",
+            ))
+        rows.append(row)
+    rows.append([
+        InlineKeyboardButton("✏️ بروكسي مخصص", callback_data="proxy_custom"),
+        InlineKeyboardButton("🔌 افتراضي", callback_data="proxy_direct"),
+    ])
+    rows.append([
+        InlineKeyboardButton("⬅️ رجوع للقائمة", callback_data="back_to_main"),
+    ])
+    return InlineKeyboardMarkup(rows)
 
 
 def control_panel(grid_rows: int, grid_cols: int) -> InlineKeyboardMarkup:
