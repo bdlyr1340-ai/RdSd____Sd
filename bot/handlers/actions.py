@@ -40,10 +40,18 @@ async def _status_caption(sess: BrowserSession, caption: str) -> str:
     title = st.get("title") or "بدون عنوان"
     if len(title) > 70:
         title = title[:69] + "…"
+    # LRM markers keep X/Y from flipping in Arabic Telegram captions.
+    lrm = "\u200e"
+    zoom = st.get('zoom', 1) or 1
+    try:
+        zoom_txt = f"{float(zoom) * 100:.0f}%"
+    except Exception:
+        zoom_txt = str(zoom)
     line = (
-        f"🧭 الموضع: X={st.get('x', 0)} / Y={st.get('y', 0)} | "
+        f"🧭 {lrm}X:{st.get('x', 0)} | Y:{st.get('y', 0)}{lrm} — "
         f"الشاشة: {st.get('viewportW', 0)}×{st.get('viewportH', 0)} | "
-        f"الصفحة: {st.get('pageW', 0)}×{st.get('pageH', 0)}"
+        f"الصفحة: {st.get('pageW', 0)}×{st.get('pageH', 0)} | "
+        f"الزوم: {zoom_txt}"
     )
     out = f"{caption}\n\n{line}\n🏷️ {title}\n🔗 {_short_url(st.get('url', ''))}"
     return out[:1000]
@@ -54,8 +62,13 @@ async def _send_screenshot(
     sess: BrowserSession,
     path: Optional[str],
     caption: str,
+    *,
+    as_document: bool = False,
 ) -> None:
-    """Send a screenshot to the user, with a fallback message if missing."""
+    """Send a screenshot to the user, with a fallback message if missing.
+
+    as_document=True preserves HD/full-page details better than Telegram photo compression.
+    """
     caption = await _status_caption(sess, caption)
     panel = control_panel(sess.grid_rows, sess.grid_cols)
     chat_id = update.effective_chat.id
@@ -63,15 +76,23 @@ async def _send_screenshot(
     if path and os.path.exists(path):
         try:
             with open(path, "rb") as f:
-                await bot.send_photo(
-                    chat_id=chat_id,
-                    photo=InputFile(f, filename=os.path.basename(path)),
-                    caption=caption,
-                    reply_markup=panel,
-                )
+                if as_document:
+                    await bot.send_document(
+                        chat_id=chat_id,
+                        document=InputFile(f, filename=os.path.basename(path)),
+                        caption=caption,
+                        reply_markup=panel,
+                    )
+                else:
+                    await bot.send_photo(
+                        chat_id=chat_id,
+                        photo=InputFile(f, filename=os.path.basename(path)),
+                        caption=caption,
+                        reply_markup=panel,
+                    )
             return
         except Exception as exc:
-            log.warning("send_photo failed: %s", exc)
+            log.warning("send screenshot failed: %s", exc)
     await bot.send_message(
         chat_id=chat_id,
         text=caption,
@@ -214,6 +235,84 @@ async def act_screenshot(update: Update,
     await _send_screenshot(update, sess, p, f"📸 لقطة شاشة\n🔗 {url or '—'}")
 
 
+async def act_screenshot_hd(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    sess = await _ensure_session(update)
+    if not sess:
+        return
+    p = await sess.screenshot()
+    await _send_screenshot(
+        update, sess, p,
+        "📸 لقطة HD — انرسلت كملف حتى تبقى واضحة وما تضيع التفاصيل.",
+        as_document=True,
+    )
+
+
+async def act_screenshot_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    sess = await _ensure_session(update)
+    if not sess:
+        return
+    await update.effective_message.reply_text("🖼️ جاري أخذ لقطة كاملة للصفحة…")
+    p = await sess.screenshot_full_page()
+    await _send_screenshot(
+        update, sess, p,
+        "🖼️ لقطة كاملة للصفحة — افتح الملف وشوف الصفحة كلها بالتفاصيل.",
+        as_document=True,
+    )
+
+
+async def act_fit_screen(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    sess = await _ensure_session(update)
+    if not sess:
+        return
+    p = await sess.fit_screen()
+    await _send_screenshot(
+        update, sess, p,
+        "🧩 تم ضبط الشاشة تلقائياً: عرض 1920×1080 + تصغير الصفحة حتى تبين تفاصيل أكثر.",
+    )
+
+
+async def act_view_laptop(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    sess = await _ensure_session(update)
+    if not sess:
+        return
+    p = await sess.set_viewport(config.LAPTOP_VIEWPORT_W, config.LAPTOP_VIEWPORT_H, 1.0)
+    await _send_screenshot(update, sess, p, "💻 تم ضبط الشاشة على حجم لابتوب 1366×768")
+
+
+async def act_view_desktop(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    sess = await _ensure_session(update)
+    if not sess:
+        return
+    p = await sess.set_viewport(config.DESKTOP_VIEWPORT_W, config.DESKTOP_VIEWPORT_H, config.AUTO_PAGE_ZOOM)
+    await _send_screenshot(update, sess, p, "🖥️ تم ضبط الشاشة على حجم سطح مكتب 1920×1080 مع تصغير مناسب")
+
+
+async def act_zoom_out(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    sess = await _ensure_session(update)
+    if not sess:
+        return
+    st = await sess.page_status()
+    try:
+        current = float(st.get("zoom") or 1)
+    except Exception:
+        current = 1.0
+    p = await sess.set_zoom(max(config.MIN_PAGE_ZOOM, current - 0.10))
+    await _send_screenshot(update, sess, p, "🔍 تم تصغير الصفحة 10% حتى تبين مساحة أكثر")
+
+
+async def act_zoom_in(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    sess = await _ensure_session(update)
+    if not sess:
+        return
+    st = await sess.page_status()
+    try:
+        current = float(st.get("zoom") or 1)
+    except Exception:
+        current = 1.0
+    p = await sess.set_zoom(min(config.MAX_PAGE_ZOOM, current + 0.10))
+    await _send_screenshot(update, sess, p, "🔎 تم تكبير الصفحة 10%")
+
+
 async def act_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     sess = await _ensure_session(update)
     if not sess:
@@ -315,13 +414,27 @@ async def act_page_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     if not sess:
         return
     st = await sess.page_status()
+    lrm = "\u200e"
+    try:
+        zoom_txt = f"{float(st.get('zoom') or 1) * 100:.0f}%"
+    except Exception:
+        zoom_txt = str(st.get('zoom', '—'))
+    scrollables = st.get("scrollables") or []
+    panels = ""
+    if scrollables:
+        panels = "\n• صناديق داخلية قابلة للتمرير: " + ", ".join(
+            f"{x.get('tag')} {x.get('w')}×{x.get('h')}→{x.get('sw')}×{x.get('sh')}"
+            for x in scrollables[:3]
+        )
     body = (
         "🧭 حالة الصفحة الآن\n\n"
-        f"• الموضع: X={st.get('x', 0)} / Y={st.get('y', 0)}\n"
+        f"• {lrm}X:{st.get('x', 0)} | Y:{st.get('y', 0)}{lrm}\n"
         f"• حجم الشاشة: {st.get('viewportW', 0)}×{st.get('viewportH', 0)}\n"
         f"• حجم الصفحة: {st.get('pageW', 0)}×{st.get('pageH', 0)}\n"
+        f"• الزوم: {zoom_txt}\n"
         f"• العنصر بالنص: {st.get('centreTag', '—') or '—'}\n"
-        f"• العنصر النشط: {st.get('activeTag', '—') or '—'}\n"
+        f"• العنصر النشط: {st.get('activeTag', '—') or '—'}"
+        f"{panels}\n"
         f"• العنوان: {(st.get('title') or 'بدون عنوان')[:80]}\n"
         f"• الرابط: {_short_url(st.get('url', ''), 180)}"
     )
