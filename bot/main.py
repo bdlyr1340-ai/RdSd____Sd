@@ -15,6 +15,7 @@ from bot import config
 from bot.handlers import actions as h_actions
 from bot.handlers import start as h_start
 from bot.services.browser_manager import manager
+from bot.services.access_control import request_access
 from bot.utils.keyboards import main_menu
 
 log = logging.getLogger(__name__)
@@ -62,6 +63,7 @@ async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 # ════════════════════════════════════════════════════════════════════
 GRID_PRESET_RE = re.compile(r"^grid_set_(\d+)_(\d+)$")
 PROXY_PICK_RE = re.compile(r"^proxy_pick_([A-Z]{2})$")
+ACCESS_DECISION_RE = re.compile(r"^access_(approve|reject)_(\d+)$")
 
 
 async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -70,6 +72,43 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await q.answer()
     data = q.data or ""
+
+    # ── admin access approvals ──────────────────────────────────
+    m_access = ACCESS_DECISION_RE.match(data)
+    if m_access:
+        decision, target_raw = m_access.group(1), m_access.group(2)
+        target_id = int(target_raw)
+        if not config.is_admin(update.effective_user.id):
+            await q.message.reply_text("🚫 هذا الزر للإدمن فقط.")
+            return
+        if decision == "approve":
+            config.approve_user(target_id)
+            await q.message.reply_text(f"✅ تمت الموافقة الدائمة على المستخدم: {target_id}")
+            try:
+                await ctx.bot.send_message(
+                    chat_id=target_id,
+                    text="✅ تمت الموافقة عليك. تگدر تستخدم البوت دائماً الآن. اضغط /start",
+                )
+            except Exception:
+                pass
+        else:
+            config.reject_user(target_id)
+            await q.message.reply_text(f"❌ تم رفض المستخدم: {target_id}")
+            try:
+                await ctx.bot.send_message(
+                    chat_id=target_id,
+                    text="❌ تم رفض طلب استخدام البوت من الإدمن.",
+                )
+            except Exception:
+                pass
+        pending = ctx.application.bot_data.setdefault("pending_access_requests", set())
+        pending.discard(target_id)
+        return
+
+    # Block all non-approved button actions except the approval flow above.
+    if not config.is_authorized(update.effective_user.id):
+        await request_access(update, ctx)
+        return
 
     # ── menu navigation ─────────────────────────────────────────
     if data == "session_start":
@@ -152,6 +191,11 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "act_scroll_down":   h_actions.act_scroll_down,
         "act_scroll_top":    h_actions.act_scroll_top,
         "act_scroll_bottom": h_actions.act_scroll_bottom,
+        "act_scroll_left":   h_actions.act_scroll_left,
+        "act_scroll_right":  h_actions.act_scroll_right,
+        "act_scroll_left_end":  h_actions.act_scroll_left_end,
+        "act_scroll_right_end": h_actions.act_scroll_right_end,
+        "act_page_status":   h_actions.act_page_status,
         "act_grid_show":     h_actions.act_grid_show,
         "act_grid_settings": h_actions.act_grid_settings,
         "act_find_click":    h_actions.act_find_click,

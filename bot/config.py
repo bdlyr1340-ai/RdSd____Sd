@@ -1,6 +1,7 @@
 """Bot configuration — values loaded from environment variables."""
 from __future__ import annotations
 
+import json
 import os
 import sys
 from typing import Any, Dict, Optional
@@ -28,6 +29,9 @@ USER_AGENT: str = os.environ.get(
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
 )
+SCROLL_STEP_Y: int = int(os.environ.get("SCROLL_STEP_Y", "650"))
+SCROLL_STEP_X: int = int(os.environ.get("SCROLL_STEP_X", "650"))
+
 
 # ── Browser engine ──
 # "auto"      → Camoufox if installed, otherwise Playwright Chromium
@@ -48,6 +52,18 @@ HUMAN_TYPO_RATE: float = float(os.environ.get("HUMAN_TYPO_RATE", "0.0"))
 # ── Files ──
 SHOTS_DIR: str = os.environ.get("SHOTS_DIR", "/tmp/shots")
 SCRIPTS_DIR: str = os.environ.get("SCRIPTS_DIR", "/tmp/scripts")
+
+# ── Access approval ──
+# When ADMIN_IDS is set, new users request access and an admin approves once.
+# Approved users are saved here, so they can use the bot permanently.
+ACCESS_APPROVAL_REQUIRED: bool = os.environ.get(
+    "ACCESS_APPROVAL_REQUIRED", "1"
+) not in ("0", "false", "False")
+APPROVED_USERS_FILE: str = os.environ.get(
+    "APPROVED_USERS_FILE",
+    os.path.join(SCRIPTS_DIR, "approved_users.json"),
+)
+
 
 # ── Mouse grid ──
 DEFAULT_GRID_ROWS: int = int(os.environ.get("DEFAULT_GRID_ROWS", "20"))
@@ -144,11 +160,68 @@ PROXY_URLS: Dict[str, str] = {
 }
 
 
+def _read_approved_users() -> dict:
+    """Read the persistent approval file safely."""
+    try:
+        with open(APPROVED_USERS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            data.setdefault("approved_user_ids", [])
+            return data
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+    return {"approved_user_ids": []}
+
+
+def _write_approved_users(data: dict) -> None:
+    os.makedirs(os.path.dirname(APPROVED_USERS_FILE) or ".", exist_ok=True)
+    ids = sorted({int(x) for x in data.get("approved_user_ids", [])})
+    payload = {"approved_user_ids": ids}
+    with open(APPROVED_USERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
+
+
+def approval_required() -> bool:
+    # If no admin is configured, keep the old safe behaviour: allow everyone.
+    return ACCESS_APPROVAL_REQUIRED and bool(ADMIN_IDS)
+
+
+def is_approved_user(user_id: int) -> bool:
+    data = _read_approved_users()
+    return int(user_id) in {int(x) for x in data.get("approved_user_ids", [])}
+
+
+def approve_user(user_id: int) -> None:
+    data = _read_approved_users()
+    ids = {int(x) for x in data.get("approved_user_ids", [])}
+    ids.add(int(user_id))
+    data["approved_user_ids"] = sorted(ids)
+    _write_approved_users(data)
+
+
+def reject_user(user_id: int) -> None:
+    data = _read_approved_users()
+    ids = {int(x) for x in data.get("approved_user_ids", [])}
+    ids.discard(int(user_id))
+    data["approved_user_ids"] = sorted(ids)
+    _write_approved_users(data)
+
+
 def is_authorized(user_id: int) -> bool:
     """Return True if a user is allowed to use the bot."""
+    if is_admin(user_id):
+        return True
+    if approval_required():
+        return is_approved_user(user_id)
     if ALLOW_ALL:
         return True
-    return user_id in ADMIN_IDS
+    return False
 
 
 def parse_proxy_url(url: str) -> Optional[dict]:
@@ -192,3 +265,4 @@ def validate() -> None:
         sys.exit(1)
     os.makedirs(SHOTS_DIR, exist_ok=True)
     os.makedirs(SCRIPTS_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(APPROVED_USERS_FILE) or ".", exist_ok=True)
