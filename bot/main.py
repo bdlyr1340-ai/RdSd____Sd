@@ -61,6 +61,7 @@ async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 # Callback router
 # ════════════════════════════════════════════════════════════════════
 GRID_PRESET_RE = re.compile(r"^grid_set_(\d+)_(\d+)$")
+PROXY_PICK_RE = re.compile(r"^proxy_pick_([A-Z]{2})$")
 
 
 async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -77,6 +78,18 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await q.message.reply_markdown(h_start.HOW_IT_WORKS); return
     if data == "help":
         await q.message.reply_markdown(h_start.HELP); return
+    if data == "engine_info":
+        await h_actions.engine_info(update, ctx); return
+    if data == "back_to_main":
+        await q.message.reply_text(
+            "القائمة الرئيسية:",
+            reply_markup=main_menu(
+                ctx.user_data.get("proxy_label", ""), manager.engine,
+            ),
+        )
+        ctx.user_data.pop("awaiting", None)
+        ctx.user_data.pop("await_meta", None)
+        return
     if data == "back_to_panel":
         sess = manager.get(update.effective_user.id)
         if sess:
@@ -86,8 +99,12 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 reply_markup=control_panel(sess.grid_rows, sess.grid_cols),
             )
         else:
-            await q.message.reply_text("القائمة الرئيسية:",
-                                       reply_markup=main_menu())
+            await q.message.reply_text(
+                "القائمة الرئيسية:",
+                reply_markup=main_menu(
+                    ctx.user_data.get("proxy_label", ""), manager.engine,
+                ),
+            )
         ctx.user_data.pop("awaiting", None)
         ctx.user_data.pop("await_meta", None)
         return
@@ -102,7 +119,24 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 reply_markup=control_panel(sess.grid_rows, sess.grid_cols),
             )
         else:
-            await q.message.reply_text("✖️ ألغيت الإدخال.")
+            await q.message.reply_text(
+                "✖️ ألغيت الإدخال.",
+                reply_markup=main_menu(
+                    ctx.user_data.get("proxy_label", ""), manager.engine,
+                ),
+            )
+        return
+
+    # ── proxy menu ──────────────────────────────────────────────
+    if data == "proxy_menu":
+        await h_actions.proxy_show_menu(update, ctx); return
+    if data == "proxy_direct":
+        await h_actions.proxy_set_direct(update, ctx); return
+    if data == "proxy_custom":
+        await h_actions.proxy_custom_input(update, ctx); return
+    m_proxy = PROXY_PICK_RE.match(data)
+    if m_proxy:
+        await h_actions.proxy_pick_preset(update, ctx, m_proxy.group(1))
         return
 
     # ── action buttons ──────────────────────────────────────────
