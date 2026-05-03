@@ -192,27 +192,143 @@ class BrowserSession:
             return await self._safe_screenshot(self._shot_path("clear"))
 
     async def scroll(self, direction: str) -> Optional[str]:
-        """direction ∈ {up, down, top, bottom}."""
+        """Smart scrolling.
+
+        Supports the page itself and inner scrollable panels.
+        direction ∈ {up, down, top, bottom, left, right, left_end, right_end}.
+        """
         async with self._lock:
+            result: Dict[str, Any] = {}
             try:
-                if direction == "up":
-                    await self.page.mouse.wheel(0, -300)
-                    self.recorder.log("scroll", dy=-300)
-                elif direction == "down":
-                    await self.page.mouse.wheel(0, 300)
-                    self.recorder.log("scroll", dy=300)
+                result = await self.page.evaluate(
+                    """
+                    ({direction, stepX, stepY}) => {
+                        const doc = document.scrollingElement || document.documentElement || document.body;
+                        const isElement = (el) => el && el.nodeType === 1;
+                        const canY = (el) => isElement(el) && el.scrollHeight > el.clientHeight + 2;
+                        const canX = (el) => isElement(el) && el.scrollWidth > el.clientWidth + 2;
+                        const centre = document.elementFromPoint(Math.floor(innerWidth / 2), Math.floor(innerHeight / 2));
+                        const active = document.activeElement;
+                        const chain = [];
+                        const add = (el) => { if (isElement(el) && !chain.includes(el)) chain.push(el); };
+                        let el = centre;
+                        while (el) { add(el); el = el.parentElement; }
+                        el = active;
+                        while (el) { add(el); el = el.parentElement; }
+                        add(doc); add(document.documentElement); add(document.body);
+
+                        const before = {x: window.scrollX, y: window.scrollY};
+                        let target = doc;
+                        let moved = false;
+                        const useY = ["up", "down", "top", "bottom"].includes(direction);
+                        const useX = ["left", "right", "left_end", "right_end"].includes(direction);
+
+                        for (const item of chain) {
+                            if (useY && canY(item)) { target = item; break; }
+                            if (useX && canX(item)) { target = item; break; }
+                        }
+
+                        const scrollOne = (item) => {
+                            const oldX = item === doc ? window.scrollX : item.scrollLeft;
+                            const oldY = item === doc ? window.scrollY : item.scrollTop;
+                            if (direction === "up") item.scrollBy({top: -stepY, behavior: "instant"});
+                            else if (direction === "down") item.scrollBy({top: stepY, behavior: "instant"});
+                            else if (direction === "left") item.scrollBy({left: -stepX, behavior: "instant"});
+                            else if (direction === "right") item.scrollBy({left: stepX, behavior: "instant"});
+                            else if (direction === "top") item.scrollTo({top: 0, behavior: "instant"});
+                            else if (direction === "bottom") item.scrollTo({top: item.scrollHeight, behavior: "instant"});
+                            else if (direction === "left_end") item.scrollTo({left: 0, behavior: "instant"});
+                            else if (direction === "right_end") item.scrollTo({left: item.scrollWidth, behavior: "instant"});
+                            const newX = item === doc ? window.scrollX : item.scrollLeft;
+                            const newY = item === doc ? window.scrollY : item.scrollTop;
+                            return (Math.abs(newX - oldX) + Math.abs(newY - oldY)) > 1;
+                        };
+
+                        moved = scrollOne(target);
+
+                        // If the chosen panel did not move, try the document and then every scrollable panel.
+                        if (!moved) {
+                            const fallbacks = [doc, ...chain].filter((item, i, arr) => arr.indexOf(item) === i);
+                            for (const item of fallbacks) {
+                                if ((useY && canY(item)) || (useX && canX(item))) {
+                                    if (scrollOne(item)) { target = item; moved = true; break; }
+                                }
+                            }
+                        }
+
+                        // For end buttons, make sure both page and panels have a chance to reach the edge.
+                        if (["top", "bottom", "left_end", "right_end"].includes(direction)) {
+                            for (const item of chain) {
+                                if ((useY && canY(item)) || (useX && canX(item))) scrollOne(item);
+                            }
+                        }
+
+                        return {
+                            moved,
+                            direction,
+                            before,
+                            after: {x: window.scrollX, y: window.scrollY},
+                            viewport: {w: innerWidth, h: innerHeight},
+                            page: {w: doc.scrollWidth, h: doc.scrollHeight},
+                            targetTag: target && target.tagName ? target.tagName.toLowerCase() : "page",
+                            targetClass: target && target.className ? String(target.className).slice(0, 80) : "",
+                        };
+                    }
+                    """,
+                    {
+                        "direction": direction,
+                        "stepX": config.SCROLL_STEP_X,
+                        "stepY": config.SCROLL_STEP_Y,
+                    },
+                )
+                if direction in ("up", "down", "left", "right"):
+                    dx = 0
+                    dy = 0
+                    if direction == "up": dy = -config.SCROLL_STEP_Y
+                    elif direction == "down": dy = config.SCROLL_STEP_Y
+                    elif direction == "left": dx = -config.SCROLL_STEP_X
+                    elif direction == "right": dx = config.SCROLL_STEP_X
+                    self.recorder.log("scroll", dx=dx, dy=dy, result=result)
                 elif direction == "top":
-                    await self.page.evaluate("window.scrollTo(0, 0)")
-                    self.recorder.log("scroll_top")
+                    self.recorder.log("scroll_top", result=result)
                 elif direction == "bottom":
-                    await self.page.evaluate(
-                        "window.scrollTo(0, document.body.scrollHeight)"
-                    )
-                    self.recorder.log("scroll_bottom")
+                    self.recorder.log("scroll_bottom", result=result)
+                elif direction == "left_end":
+                    self.recorder.log("scroll_left_end", result=result)
+                elif direction == "right_end":
+                    self.recorder.log("scroll_right_end", result=result)
             except Exception as exc:
                 log.warning("scroll(%s) failed: %s", direction, exc)
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.35)
             return await self._safe_screenshot(self._shot_path(f"scroll_{direction}"))
+
+    async def page_status(self) -> Dict[str, Any]:
+        """Return a small live status object to understand what is visible."""
+        try:
+            return await self.page.evaluate(
+                """
+                () => {
+                    const doc = document.scrollingElement || document.documentElement || document.body;
+                    const centre = document.elementFromPoint(Math.floor(innerWidth / 2), Math.floor(innerHeight / 2));
+                    const active = document.activeElement;
+                    return {
+                        url: location.href,
+                        title: document.title || '',
+                        x: Math.round(window.scrollX),
+                        y: Math.round(window.scrollY),
+                        viewportW: Math.round(innerWidth),
+                        viewportH: Math.round(innerHeight),
+                        pageW: Math.round(doc.scrollWidth),
+                        pageH: Math.round(doc.scrollHeight),
+                        centreTag: centre ? centre.tagName.toLowerCase() : '',
+                        activeTag: active ? active.tagName.toLowerCase() : '',
+                    };
+                }
+                """
+            )
+        except Exception as exc:
+            log.warning("page_status failed: %s", exc)
+            return {}
 
     # ----- mouse-grid actions -----------------------------------------
     async def grid_screenshot(self) -> Optional[str]:

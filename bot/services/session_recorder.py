@@ -337,16 +337,32 @@ class SessionRecorder:
                 "await page.keyboard.press('Delete')",
             ]
         if t == "scroll":
+            dx = int(d.get("dx", 0))
             dy = int(d.get("dy", 0))
-            return [f"await page.mouse.wheel(0, {dy})",
-                    "await asyncio.sleep(0.2)"]
+            return [
+                f"await page.evaluate(\"window.scrollBy({{left: {dx}, top: {dy}, behavior: 'instant'}})\")",
+                "await asyncio.sleep(0.2)",
+            ]
         if t == "scroll_top":
-            return ["await page.evaluate('window.scrollTo(0, 0)')",
-                    "await asyncio.sleep(0.2)"]
+            return [
+                "await page.evaluate(\"window.scrollTo({top: 0, behavior: 'instant'})\")",
+                "await asyncio.sleep(0.2)",
+            ]
         if t == "scroll_bottom":
-            return ["await page.evaluate("
-                    "'window.scrollTo(0, document.body.scrollHeight)')",
-                    "await asyncio.sleep(0.2)"]
+            return [
+                "await page.evaluate(\"window.scrollTo({top: document.body.scrollHeight, behavior: 'instant'})\")",
+                "await asyncio.sleep(0.2)",
+            ]
+        if t == "scroll_left_end":
+            return [
+                "await page.evaluate(\"window.scrollTo({left: 0, behavior: 'instant'})\")",
+                "await asyncio.sleep(0.2)",
+            ]
+        if t == "scroll_right_end":
+            return [
+                "await page.evaluate(\"window.scrollTo({left: document.body.scrollWidth, behavior: 'instant'})\")",
+                "await asyncio.sleep(0.2)",
+            ]
         if t == "grid_click":
             x = float(d.get("x", 0))
             y = float(d.get("y", 0))
@@ -406,12 +422,19 @@ class SessionRecorder:
         if t == "clear_text":
             return "❌ مسح النص"
         if t == "scroll":
-            dy = d.get("dy", 0)
-            return f"🖱️ سحب ({dy:+d}px)"
+            dx = int(d.get("dx", 0))
+            dy = int(d.get("dy", 0))
+            if dx:
+                return f"🖱️ تحريك أفقي ({dx:+d}px)"
+            return f"🖱️ سحب عمودي ({dy:+d}px)"
         if t == "scroll_top":
             return "⏫ صعود لأعلى الصفحة"
         if t == "scroll_bottom":
             return "⏬ نزول لأسفل الصفحة"
+        if t == "scroll_left_end":
+            return "⇤ تحريك إلى أقصى اليسار"
+        if t == "scroll_right_end":
+            return "أقصى اليمين ⇥"
         if t == "grid_click":
             return f"🔢 ضغط على خلية الشبكة #{d.get('cell')}"
         if t == "find_click":
